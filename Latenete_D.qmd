@@ -1,0 +1,92 @@
+---
+title: "Latente"
+format: html
+author: "ANATO Diane"
+code-fold: false
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+Importation
+
+```{r}
+#package
+library(readr)
+library(caret)
+library(pls)
+library(ggplot2)
+library(gridExtra)
+library(corrplot)
+library(FactoMineR)
+library(factoextra)
+
+```
+
+```{r}
+# base
+data <- read_csv("PRSA_Data_Aotizhongxin_20130301-20170228.csv")
+summary(data)
+```
+```{r}
+#str(data)
+```
+
+
+```{r}
+#mettre en facteur
+data$wd <-as.factor(data$wd) 
+data$station <-as.factor(data$station)
+```
+
+```{r}
+summary(data)
+```
+```{r}
+# Suppression
+data <- data[, !names(data) %in% c("No")]
+df_clean <- na.omit(data)
+```
+
+```{r}
+library(tidyverse)
+df_clean |>
+  select(where(is.numeric)) |>                   
+  cor(use = "pairwise.complete.obs") |>       
+  corrplot::corrplot.mixed()
+
+```
+- PM2.5, PM10, NO2, CO → fortement liées
+
+-TEMP, DEWP → très corrélées
+
+- PRES négativement corrélée avec TEMP et DEWP
+
+```{r}
+ggp <- lapply(names(data), function(x) {
+  
+  if(is.numeric(data[[x]])) {
+    ggplot(data, aes(x = .data[[x]])) +
+      geom_histogram(fill = "blue", color = "white") +
+      ggtitle(x)
+    
+  } else {
+    ggplot(data, aes(x = .data[[x]])) +
+      geom_bar(fill = "orange") +
+      ggtitle(x)
+  }
+  
+})
+```
+
+```{r}
+library(gridExtra)
+
+n <- length(ggp)
+ncol <- 3
+nrow <- ceiling(n / ncol)
+
+grid.arrange(grobs = ggp, ncol = ncol, nrow = nrow)
+```
+

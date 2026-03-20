@@ -1,0 +1,412 @@
+---
+title: "Projet modélisation avec les variables latentes"
+format: pdf
+editor: visual
+---
+
+# Introduction
+
+Regression de variable y quantitatives avec PCR et PLS (1,2) Les données sur la mésure de la la qualité de l'air dans une station A pékin (chine). Type de données - Variables temporelles year month day hour
+
+-   Polluants atmosphériques
+
+-   PM2.5 (Polluant prioritaire mondial, forte variance (0-1000 µg/m³), très corrélé PM10/NO2/météo)
+
+-   PM10 ( Très bonne : Particules grossières, corrélée PM2.5 (r\>0.9), plage 0-500 µg/m³)
+
+SO₂ NO₂ CO O₃
+
+-   Variables météorologiques
+
+TEMP : température
+
+PRES : pression
+
+DEWP : point de rosée
+
+RAIN : précipitation
+
+wd : direction du vent
+
+WSPM : vitesse du vent
+
+# Importaion des packges
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(mice)
+library(naniar)
+library(corrplot)
+library(RColorBrewer)
+library(vcd)  
+library(DescTools)
+library(forcats)
+library(reshape2)
+library(factoextra)
+library(FactoMineR)
+library(psych)
+library(lmtest)
+library(vip)
+library(caret)
+library(pls) ## PCR et PLS
+```
+
+# Importaion de la base de données
+
+```{r}
+air_quality <- read_csv("PRSA_Data_Aotizhongxin_20130301-20170228.csv")
+
+str(air_quality)
+
+summary(air_quality)
+```
+
+## Netoyage
+
+```{r}
+colnames(air_quality) 
+```
+
+```{r}
+# Suppression des variables temporelles et de la variable catégorielle wd
+air_quality <- air_quality |> 
+  select(-No,-year, -month, - day, - hour, -wd,-RAIN, -station)
+
+# Vérifier la structure du dataset après suppression
+str(air_quality)
+summary(air_quality)
+```
+
+10 variables restantes car wd est quali nominantive donc pas prise en compte. De meme que rain avec beaucoup de valeur nulle(pas très correlé avec les autres varaibles).
+
+### Suppressio des na
+
+```{r}
+# Supprimer toutes les lignes contenant des NA
+air_quality <- na.omit(air_quality)
+
+# Vérifier qu'il n'y a plus de NA
+colSums(is.na(air_quality))
+
+str(air_quality)
+```
+
+31 876 lignes restantes, donc bien
+
+# Analyse descriptive
+
+```{r}
+summary(air_quality)
+```
+
+### Histogramme
+
+```{r}
+# Converting data to long format and scaling the values
+air_quality_long <- air_quality |> 
+  pivot_longer(everything(),
+               names_to = "variable", 
+               values_to = "value")  |> 
+  mutate(value = scale(value))  # Scale the data
+
+# 1. Histograms of Scaled Data
+ggplot(air_quality_long, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distribution des variables",
+       x = "Valeur",
+       y = "Fréquence")
+
+```
+
+### Linéarisation
+
+```{r}
+library(dplyr)
+
+air_quality <- air_quality |> 
+  mutate(
+    CO = log(CO),
+    NO2 = log(NO2),
+    O3 = log(O3),
+    PM10 = log(PM10),
+    `PM2.5` = log(`PM2.5`),
+    SO2 = log(SO2)
+  )
+
+air_quality <- air_quality |>
+  rename(
+    lCO = CO,
+    lNO2 = NO2,
+    lO3 = O3,
+    lPM10 = PM10,
+    lPM2_5 = `PM2.5`,
+    lSO2 = SO2
+  )
+```
+
+### Boxplots
+
+```{r}
+air_quality_long <- air_quality |> 
+  pivot_longer(everything(),
+               names_to = "variable", 
+               values_to = "value")  |> 
+  mutate(value = scale(value))  # Scale the data
+
+# 2. Box Plots of Scaled Data
+ggplot(air_quality_long, aes(x = variable, y = value)) +
+  geom_boxplot(fill = "lightblue") +
+  facet_wrap(~variable, scales = "free_y") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  labs(title = "Boxplots des variables",
+       x = "Variables",
+       y = "Valeurs")
+```
+
+-   Distribution asymétrique et presence de valeurs potentiellement atypiques sur toutes variables sauf DEWP,TEMP et PRES
+
+## Traitment de valeurs atypiques
+
+Suppression des observation dont les valeurs sont extremes (hors des intervalles interquartiles)
+
+```{r}
+vars_outliers <- c("lCO", "lNO2", "lO3", "lPM10", "WSPM")
+
+remove_outliers_iqr <- function(data, vars) {
+  data |>
+    filter(
+      if_all(
+        all_of(vars),
+        ~ . >= quantile(., 0.25, na.rm = TRUE) - 1.5 * IQR(., na.rm = TRUE) &
+          . <= quantile(., 0.75, na.rm = TRUE) + 1.5 * IQR(., na.rm = TRUE)
+      )
+    )
+}
+
+air_quality_clean <- air_quality
+n_old <- nrow(air_quality_clean)
+
+repeat {
+  air_quality_clean <- remove_outliers_iqr(air_quality_clean, vars_outliers)
+  n_new <- nrow(air_quality_clean)
+  
+  if (n_new == n_old) break
+  n_old <- n_new
+}
+str(air_quality_clean)
+```
+
+Maintenant à 27,452 observations
+
+## Après traitement
+
+```{r}
+summary(air_quality_clean)
+```
+
+```{r}
+library(tidyr)
+
+air_quality_long <- air_quality_clean |> 
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+```
+
+**Boxplots après traitement**
+
+```{r}
+
+ggplot(air_quality_long, aes(x = "", y = value)) +
+  geom_boxplot(fill = "lightblue") +
+  facet_wrap(~variable, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Boxplots des variables après suppression des valeurs atypiques",
+    x = NULL,
+    y = "Valeurs"
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+Plus de valeurs atypiques
+
+```{r}
+ggplot(air_quality_long, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distribution des variables",
+       x = "Valeur",
+       y = "Fréquence")
+```
+
+## Bivariée
+
+```{r}
+air_quality <- air_quality_clean
+cor_matrix <- cor(air_quality)
+print(cor_matrix)
+```
+
+```{r}
+# Packages nécessaires
+library(corrplot)
+library(RColorBrewer)
+
+# Si air_quality contient seulement les variables quantitatives :
+variable_quant <- air_quality
+
+# Matrice de corrélation de Spearman
+heatmap2 <- cor(variable_quant,
+                use = "complete.obs",
+                method = "spearman")
+
+# Affichage de la matrice de corrélation
+corrplot::corrplot(heatmap2,
+         method = "color",
+         type = "upper",
+         tl.col = "black",
+         tl.cex = 0.8,
+         addCoef.col = "black",
+         number.cex = 0.65,
+         diag = FALSE,
+         col = colorRampPalette(brewer.pal(11, "RdBu"))(200))
+
+
+```
+
+Existence de corrélatiion positives et negatives entre nos variables
+
+## MCO
+
+```{r}
+modelmco <- lm(lPM2_5 ~ ., data = air_quality)
+summary(modelmco)
+```
+
+```{r}
+VIF(modelmco)
+```
+
+Multicollinéarité présente pour cetaines valeur sup à 5. Passage aux autres méthodes de regression
+
+## PCR
+
+### ACP sur nos données
+
+```{r}
+# ACP
+respca=PCA(air_quality)
+respca=PCA(air_quality, quanti.sup = 1)  
+fviz_screeplot(respca)# Rupture dès la 2ème composante mais proche avec la 3ème: on grade les 3 
+fviz_pca_var(respca)
+round(respca$var$cos2,2)
+dimdesc(respca) 
+```
+
+## Modèle pcr
+
+```{r}
+n <- nrow(air_quality)
+p <- ncol(air_quality) - 1
+
+modelpcr<-pcr(lPM2_5~.,data=air_quality,ncomp=min(n-1,p),scale=TRUE) # Regression sur l'ensemble des composantes   
+summary(modelpcr)
+
+R2(modelpcr) # R² de determination
+
+```
+
+```{r}
+# Pour un modèle lm
+validationplot(modelpcr,val.type="R2",type="b")
+```
+
+Le coefficient de détermination (R²) augmente avec le nombre de composantes principales, indiquant une amélioration progressive de la capacité explicative du modèle. Toutefois, les gains deviennent marginaux à partir de la 5ème composante. De meme, le graphique montre une linéaritté à partir de la 5ème composante. Ce qui suggère qu’un modèle avec 5 composantes principales offre un bon compromis entre performance et parcimonie.
+
+```{r}
+RMSEP(modelpcr)
+validationplot(modelpcr,type="b") # Evol
+```
+
+L’erreur de prédiction (MSEP) diminue à mesure que le nombre de composantes principales augmente. Le minimum est atteint pour 9 composantes (MSEP = 22.24), ce qui indique la meilleure performance prédictive du modèle PCR. Toutefois, la réduction de l’erreur devient faible après toujours 5 composantes, ce qui suggère qu’un modèle plus parcimonieux avec 5 composantes principales pourrait être suffisant tout en conservant une bonne capacité de prédiction.
+
+### PLS et comparaison
+
+```{r}
+modelpls<-plsr(lPM2_5~.,data=air_quality,ncomp=min(n-1,p),scale=TRUE)# ,scale=TRUE== ramener les varible à la meme variance    
+summary(modelpls)# % d'inertie expliqué par nos composantes
+
+R2(modelpls)
+validationplot(modelpls,val.type="R2",type="b")
+
+RMSEP(modelpls)
+validationplot(modelpls,type="b")
+
+plot(0:p,RMSEP(modelpls)$val,type="b",main="RMSEP sur toute la base",
+     ylab="",xlab="nb comp")
+lines(0:p,RMSEP(modelpcr)$val,col="blue")
+points(0:p,RMSEP(modelpcr)$val,col="blue")
+legend("topright",c("PLSR","PCR"),col=c("black","blue"),lty=1,pch=1)
+```
+
+La PLS permet de capture le maximum d'information avec peu de composantes étant donnée la correlation des cp avec la variable y. - R² montre ue maxi d'info capté dès la 3ème composante comparativement à PCR ou 4. - De meme, les RMSEP montre une min de l'erreur dès la 3ème composante. Donc en terme de parcimonie on voit bien que la PLs est plus pertinente. Etant donnée le risque de suraaprentissage possible via l'usage de tout l'echantillon, nous allons mainteant proceder à une division de l'échantillon en test et apprentissage pafin de rendre nos resultats de prédiction robutes
+
+## Validation du modèle
+
+### Validation croisée
+
+```{r}
+set.seed(123)
+
+modelpls_cv <- plsr(lPM2_5 ~ ., data = air_quality,
+                    ncomp = min(n-1, p),
+                    validation = "CV")
+
+RMSEP(modelpls_cv)
+validationplot(modelpls_cv, val.type = "RMSEP")
+```
+
+## Division de l'achantillon et test
+
+```{r}
+set.seed(123)
+
+n <- nrow(air_quality)
+train_index <- sample(1:n, size = 0.8 * n)
+
+train_data <- air_quality[train_index, ]
+test_data  <- air_quality[-train_index, ]
+```
+
+```{r}
+library(pls)
+
+model_pls_cv <- plsr(
+  lPM2_5 ~ ., 
+  data = train_data,
+  ncomp = 9,
+  validation = "CV"
+)
+```
+
+```{r}
+validationplot(model_pls_cv, val.type = "RMSEP")
+RMSEP(model_pls_cv)
+```
+
+```{r}
+opt_ncomp <- which.min(RMSEP(model_pls_cv)$val[1,,])
+opt_ncomp
+```

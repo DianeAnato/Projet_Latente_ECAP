@@ -1,0 +1,338 @@
+---
+format:
+  pdf:
+    pdf-engine: pdflatex
+    linkcolor: black
+    urlcolor: black
+    citecolor: black
+    number-sections: true
+    code-fold: true
+execute: 
+  echo: false       
+  warning: false    
+  message: false 
+lang: fr
+---
+
+\begin{center}
+\vspace*{3cm}
+{\LARGE \textbf{Analyse de la qualité de l'air de la station Aotizhongxin 2013-2017}}\\[0.5cm]
+{\large Modélisation des variables latentes}\\[2cm]
+{\large Céline THIOMBIANO — Sarah BIZA — Diane ANATO}\\[0.5cm]
+\vfill
+\end{center}
+
+\newpage
+\tableofcontents
+\newpage
+
+
+# Introduction
+
+
+# Présentation des données
+
+## Description du jeu de données
+
+## Description des variables
+
+## Choix de la variable dépendante
+
+# Préparation et nettoyage des données
+
+## Importation des packages et des données
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(mice)
+library(naniar)
+library(corrplot)
+library(RColorBrewer)
+library(vcd)  
+library(DescTools)
+library(forcats)
+library(reshape2)
+library(factoextra)
+library(FactoMineR)
+library(psych)
+library(lmtest)
+library(vip)
+library(caret)
+library(pls) 
+
+library(gridExtra)
+library(ggcorrplot)
+
+library(car)
+library(RColorBrewer)
+
+data_air <- read_csv("PRSA_Data_Aotizhongxin_20130301-20170228.csv")
+```
+
+## Suppression des variables inutiles
+
+```{r}
+data_air <- data_air |> 
+  select(-No, -year, -day, -hour, -month, -RAIN, -wd, -station)
+
+colnames(data_air)
+```
+
+## Vérification des types de données
+
+```{r}
+str(data_air)
+```
+
+## Gestion des valeurs manquantes
+
+```{r}
+sum(is.na(data_air))
+
+data_air <- data_air |>
+  drop_na()
+
+sum(is.na(data_air))
+
+colSums(is.na(data_air))
+```
+
+## Détection et traitement des valeurs aberrantes
+
+```{r}
+remove_outliers_iqr <- function(df, cols, n_pass=3){
+  for(pass in 1:n_pass){
+    for(col in cols){
+      Q1 <- quantile(df[[col]], 0.25)
+      Q3 <- quantile(df[[col]], 0.75)
+      IQR_val <- Q3 - Q1
+      lower <- Q1 - 1.5*IQR_val
+      upper <- Q3 + 1.5*IQR_val
+      df <- df %>% filter(df[[col]] >= lower & df[[col]] <= upper)
+    }
+  }
+  return(df)
+}
+
+# Colonnes numériques à nettoyer
+num_cols <- c("PM2.5","PM10","SO2","NO2","CO","O3","TEMP","PRES","DEWP")
+data_clean <- remove_outliers_iqr(data_air, num_cols, n_pass = 3)
+```
+
+```{r}
+boxplot(data_clean)
+```
+
+# Analyse exploratoire des données
+
+## Statistiques descriptives
+```{r}
+desc_stats <- data_clean |>
+  psych::describe() |>
+  select(-vars, -n, -trimmed, -mad) |>       # enlever les colonnes inutiles
+  rename(
+    Moyenne = mean,
+    Ecart_type = sd,
+    Mediane = median,
+    Min = min,
+    Max = max,
+    Plage = range,
+    Asymetrie = skew,
+    Kurtosis = kurtosis,
+    Erreur_standard = se
+  ) |>
+  mutate(across(where(is.numeric), ~round(., 2)))
+
+desc_stats
+```
+
+## Visualisation des distributions 
+```{r}
+num_cols <- colnames(data_clean)
+
+# Palette pastel (ex : 9 couleurs maximum pour 3x3)
+colors <- brewer.pal(n = length(num_cols), name = "Pastel1")
+
+par(mfrow=c(2,2), mar=c(4,4,2,1))
+
+for(i in seq_along(num_cols)){
+  hist(data_clean[[num_cols[i]]],
+       main = paste("Histogramme de", num_cols[i]),
+       xlab = num_cols[i],
+       col = colors[i],
+       border = "black",
+       probability = TRUE)
+  
+  # Ajouter densité
+  lines(density(data_clean[[num_cols[i]]]), col="red", lwd=2)
+}
+
+par(mfrow=c(1,1))
+```
+
+
+## Matrice de corrélation
+
+```{r}
+
+corr_matrix <- cor(data_clean)
+ggcorrplot(corr_matrix, 
+           hc.order = TRUE, 
+           type = "lower", 
+           lab = TRUE, 
+           lab_size = 3,
+           method="circle",
+           colors = c("red", "white", "blue"))
+```
+```{r}
+# Si air_quality contient seulement les variables quantitatives :
+variable_quant <- data_clean
+#Tjrs corrélation :Matrice de corrélation de Spearman
+heatmap2 <- cor(variable_quant,
+                use = "complete.obs",
+                method = "spearman")
+
+# Affichage de la matrice de corrélation
+corrplot::corrplot(heatmap2,
+         method = "color",
+         type = "upper",
+         tl.col = "black",
+         tl.cex = 0.8,
+         addCoef.col = "black",
+         number.cex = 0.65,
+         diag = FALSE,
+         col = colorRampPalette(brewer.pal(11, "RdBu"))(200))
+
+
+```
+
+## ACP
+
+```{r}
+acp <- PCA(data_clean[, -which(names(data_clean) == "PM2.5")],
+           scale.unit = TRUE,
+           graph = FALSE)
+
+fviz_eig(acp)
+fviz_pca_var(acp)
+
+fviz_contrib(acp, choice = "var", axes = 1)
+fviz_contrib(acp, choice = "var", axes = 2)
+```
+
+## VIF
+
+```{r}
+model_lm <- lm(PM2.5 ~ ., data = data_clean)
+vif(model_lm)
+```
+
+## Découpage train/test
+
+```{r}
+set.seed(123)
+
+train_index <- sample(1:nrow(data_clean), 0.7*nrow(data_clean))
+
+train <- data_clean[train_index, ]
+test  <- data_clean[-train_index, ]
+```
+
+# Modélisation
+
+## Estimation du modèle PCR
+
+```{r}
+model_pcr <- pcr(PM2.5 ~ ., data = train,
+                 scale = TRUE,
+                 validation = "CV")
+
+validationplot(model_pcr, val.type="MSEP")
+```
+
+## Estimation du modèle PLS
+
+```{r}
+model_pls <- plsr(PM2.5 ~ ., data = train,
+                  scale = TRUE,
+                  validation = "CV")
+
+validationplot(model_pls, val.type="MSEP")
+```
+
+## Prédiction
+
+```{r}
+pred_pcr <- predict(model_pcr, newdata = test, ncomp = 5)
+pred_pls <- predict(model_pls, newdata = test, ncomp = 5)
+```
+
+## Évaluation et comparaison des modèle
+
+```{r}
+# Fonction MAE
+mae <- function(obs, pred) mean(abs(obs - pred))
+
+# RMSE et R² déjà calculés
+mae_pcr <- mae(test$PM2.5, pred_pcr)
+mae_pls <- mae(test$PM2.5, pred_pls)
+
+rmse_pcr <- sqrt(mean((test$PM2.5 - pred_pcr)^2))
+r2_pcr   <- 1 - sum((test$PM2.5 - pred_pcr)^2) / sum((test$PM2.5 - mean(test$PM2.5))^2)
+
+rmse_pls <- sqrt(mean((test$PM2.5 - pred_pls)^2))
+r2_pls   <- 1 - sum((test$PM2.5 - pred_pls)^2) / sum((test$PM2.5 - mean(test$PM2.5))^2)
+
+# Comparaison
+results <- data.frame(
+  Modele = c("PCR", "PLS"),
+  RMSE   = c(rmse_pcr, rmse_pls),
+  R2     = c(r2_pcr, r2_pls),
+  MAE    = c(mae_pcr, mae_pls)
+)
+results
+```
+
+## Résidus
+```{r}
+res_pls <- test$PM2.5 - pred_pls
+qqnorm(res_pls); qqline(res_pls, col = "red")
+```
+
+## Visualisation
+```{r}
+# Création d'une fonction pour tracer
+plot_pred <- function(obs, pred, title=""){
+  plot(obs, pred,
+       xlab="Valeurs réelles",
+       ylab="Valeurs prédites",
+       main=title,
+       pch=19,
+       col="lightblue")
+  abline(0,1, col="red", lwd=2)
+}
+
+# Test
+plot_pred(test$PM2.5, pred_pls, "PLS : test réel vs prédit")
+
+# Train
+pred_pls_train <- predict(model_pls, newdata=train, ncomp=5)
+plot_pred(train$PM2.5, pred_pls_train, "PLS : train réel vs prédit")
+
+# Ensemble complet
+data_full <- data_clean
+pred_pls_full <- predict(model_pls, newdata=data_full, ncomp=5)
+plot_pred(data_full$PM2.5, pred_pls_full, "PLS : entier réel vs prédit")
+```
+
+## Analyse des loadings
+
+```{r}
+loadings(model_pcr)[,1:3]
+loadings(model_pls)[,1:3]
+```
+
+# Interprétation des résultats
+
+# Conclusion
