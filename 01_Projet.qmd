@@ -28,13 +28,26 @@ lang: fr
 
 # Introduction
 
+La pollution de l’air constitue aujourd’hui l’un des principaux enjeux environnementaux et sanitaires à l’échelle mondiale. Selon l’Organisation mondiale de la santé, la pollution atmosphérique est responsable d’environ 7 millions de décès prématurés chaque année dans le monde (OMS,2021). Les particules fines, notamment les PM2.5, sont très dangereuses  en raison de leur capacité à pénétrer profondément dans l’organisme.
+
+Dans certaines métropoles, notamment à Pékin, les niveaux de pollution atmosphérique dépassent largement les seuils recommandés. Les concentrations de PM2.5 y ont fréquemment excédé 100 µg/m³, soit un niveau très supérieur à la valeur guide annuelle de 5 µg/m³ fixée par l’OMS. Ces épisodes de pollution intense, souvent qualifiés de smog, témoignent de la complexité des dynamiques atmosphériques en milieu urbain (OMS, 2021 ; IQAir, 2024).
+
+L’analyse de la qualité de l’air repose sur des variables nombreuses et corrélées, incluant polluants et facteurs météorologiques. Dans ce cadre, les méthodes PCR et PLS permettent de synthétiser l’information et d’en faciliter la modélisation. Cette étude vise à analyser les déterminants de la qualité de l’air à Pékin et à comparer les performances de ces approches en prédiction.
+
 # Présentation des données
 
 ## Description du jeu de données
 
+Le jeu de données utilisé provient d’un ensemble de mesures de la qualité de l’air collectées sur plusieurs stations à Pékin. Il regroupe des observations horaires portant à la fois sur les principaux polluants atmosphériques et sur des variables météorologiques telles que la température, la pression et la vitesse du vent. Cette richesse informationnelle permet d’analyser finement les déterminants de la pollution atmosphérique dans un contexte urbain.
+
+
 ## Description des variables
 
+Le jeu de données comprend plusieurs polluants atmosphériques : les PM2.5 et PM10 désignent les particules fines en suspension, le NO₂ (dioxyde d’azote) et le SO₂ (dioxyde de soufre) sont des gaz polluants issus des activités humaines, le CO (monoxyde de carbone) résulte d’une combustion incomplète, et l’O₃ (ozone) est un polluant secondaire formé dans l’atmosphère. Il inclut également des variables météorologiques telles que la température, la pression, le point de rosée et la vitesse du vent, ainsi que des variables temporelles permettant de situer les observations.
+
 ## Choix de la variable dépendante
+
+Le choix de la variable dépendante s’est porté sur la concentration en PM2.5, en raison de son importance en matière de santé publique et de son rôle central dans l’évaluation de la qualité de l’air. Les particules fines PM2.5, en raison de leur taille, pénètrent profondément dans le système respiratoire et sont fortement associées à des risques accrus de maladies cardiovasculaires et respiratoires. Elles constituent ainsi un indicateur pertinent et largement utilisé pour mesurer le niveau de pollution atmosphérique.
 
 # Préparation et nettoyage des données
 
@@ -62,9 +75,10 @@ library(ggcorrplot)
 library(car)
 
 air_quality <- read_csv("PRSA_Data_Aotizhongxin_20130301-20170228.csv")
-str(air_quality)
+#str(air_quality)
 summary(air_quality)
 ```
+
 
 
 # Préparation et nettoyage des données
@@ -74,15 +88,18 @@ summary(air_quality)
 air_quality <- air_quality |>
   select(-No, -year, -month, -day, -hour, -wd, -RAIN, -station)
 
-str(air_quality)
-summary(air_quality)
+#str(air_quality)
+#summary(air_quality)
 ```
+Certaines variables d’identification, temporelles et catégorielles ont été supprimées afin de ne conserver que les variables quantitatives pertinentes pour l’analyse.
 
 ## Suppression des valeurs manquantes
 ```{r}
 air_quality <- na.omit(air_quality)
 colSums(is.na(air_quality))
 ```
+Les valeurs manquantes ont été supprimées afin d’obtenir un jeu de données complet.
+
 
 ## Transformation et linéarisation
 ```{r}
@@ -104,9 +121,11 @@ air_quality <- air_quality |>
     lSO2 = SO2
   )
 ```
+Certaines variables ont été transformées, notamment par une transformation logarithmique, afin de réduire l’asymétrie des distributions et de faciliter la linéarisation des relations.
 
 
 ## Détection et traitement des valeurs aberrantes
+Les valeurs aberrantes ont été identifiées à l’aide de la méthode de l’IQR, puis traitées afin de limiter leur influence sur les analyses.
 ```{r}
 vars_outliers <- c("lCO", "lNO2", "lO3", "lPM10", "WSPM")
 
@@ -130,9 +149,6 @@ repeat {
   if (n_new == n_old) break
   n_old <- n_new
 }
-
-str(air_quality_clean)
-summary(air_quality_clean)
 ```
 
 # Analyse exploratoire
@@ -200,14 +216,37 @@ for(i in seq_along(num_cols)){
 cor_matrix <- cor(air_quality_clean)
 ggcorrplot(cor_matrix, hc.order = TRUE, type = "lower", lab = TRUE)
 ```
+La matrice de corrélation met en évidence une forte corrélation entre les polluants, notamment entre PM2.5 et PM10 (0,90), ainsi qu’avec le CO et le NO2, traduisant des sources communes de pollution. La température est fortement corrélée à l’ozone (0,84), tandis que la vitesse du vent est globalement négativement liée aux polluants, indiquant un effet de dispersion.
+
 
 ## Analyse en composantes principales
 ```{r}
-respca <- PCA(air_quality_clean, quanti.sup = 1)
+#KMOS
+KMO(air_quality_clean)
+cortest.bartlett(air_quality_clean)
+
+```
+Le test de KMO présente une valeur globale de 0,76, indiquant une qualité d’échantillonnage satisfaisante et confirmant l’adéquation des données à une analyse en composantes principales.  Par ailleurs, le test de sphéricité de Bartlett est significatif (χ² = 242655,5 ; p-value = 0), ce qui permet de rejeter l’hypothèse d’indépendance des variables.
+
+```{r}
+respca <- PCA(air_quality_clean, quanti.sup = 1, graph = FALSE)
 fviz_screeplot(respca)
+
+```
+Le scree plot montre que les trois premières composantes expliquent l’essentiel de la variance, avec environ 43 % pour la première, 25 % pour la deuxième et 13 % pour la troisième, soit plus de 80 % de la variance cumulée. Au-delà de la troisième composante, la contribution devient marginale, ce qui suggère, selon la méthode du coude, de retenir trois dimensions pour résumer l’information.
+
+```{r}
 fviz_pca_var(respca)
 dimdesc(respca)
 ```
+La première dimension (Dim1) est principalement associée aux polluants (CO, NO₂, SO₂, PM10, PM2.5) et à la pression, avec des corrélations positives élevées, tandis qu’elle est négativement liée à la température, à l’ozone et au point de rosée. Elle peut ainsi être interprétée comme un axe global de pollution opposé aux conditions météorologiques favorables.
+
+La deuxième dimension (Dim2) est fortement corrélée positivement au point de rosée, aux particules fines (PM2.5, PM10) et à la température, et négativement à la pression et à la vitesse du vent. Elle traduit un axe combinant humidité et pollution, opposé à des conditions de dispersion.
+
+La troisième dimension (Dim3) est dominée par la vitesse du vent, ainsi que par le SO₂ et l’O₃, suggérant un axe lié aux conditions de dispersion atmosphérique et à certains polluants spécifiques.
+
+Ces résultats sont cohérents avec le cercle des corrélations, où les polluants (PM2.5, PM10, NO₂, CO, SO₂) se projettent dans la même direction sur la première dimension, traduisant leur forte association. À l’inverse, les variables météorologiques telles que la température et le point de rosée apparaissent opposées, confirmant leur relation inverse avec cet axe. Par ailleurs, la deuxième dimension met en évidence le rôle du point de rosée et des particules fines, tandis que la vitesse du vent se distingue davantage sur la troisième dimension, ce qui confirme son rôle spécifique dans les mécanismes de dispersion.
+
 
 # Modélisation
 
@@ -217,6 +256,7 @@ modelmco <- lm(lPM2_5 ~ ., data = air_quality_clean)
 summary(modelmco)
 VIF(modelmco)
 ```
+Le modèle MCO présente un bon pouvoir explicatif (R² = 0,886), avec la plupart des variables significatives, à l’exception du NO₂. Les polluants comme le PM10 et le CO ont un effet positif marqué sur le PM2.5, tandis que la température agit négativement.Toutefois, les VIF élevés pour certaines variables indiquent une multicolinéarité, justifiant le recours à la PCR ou la PLS.
 
 ## Modélisation PCR
 ```{r}
@@ -232,6 +272,12 @@ validationplot(modelpcr, val.type = "R2", type = "b")
 RMSEP(modelpcr)
 validationplot(modelpcr, type = "b")
 ```
+Les résultats de la PCR montrent que les premières composantes capturent une part importante de la variance, avec plus de 82 % expliquée dès la troisième composante. Le pouvoir explicatif du modèle augmente rapidement, atteignant environ 81,9 % avec trois composantes et se stabilisant ensuite autour de 88,6 %. Parallèlement, l’erreur de prédiction (RMSEP) diminue fortement puis se stabilise.
+
+Aussi, le graphique montre que le coefficient de détermination (R²) augmente rapidement avec les premières composantes, puis se stabilise à partir de la troisième composante à prlus de 80%. Au-delà, les gains deviennent marginaux, e qui suggère qu’un nombre réduit de composantes, notamment 3 à 5, est suffisant pour expliquer l’essentiel de la variance de la variable PM2.5.
+
+Ainsi, la PCR permet de réduire la dimension des données tout en conservant un bon pouvoir explicatif.
+
 
 ## Modélisation PLS
 ```{r}
@@ -244,6 +290,10 @@ validationplot(modelpls, val.type = "R2", type = "b")
 RMSEP(modelpls)
 validationplot(modelpls, type = "b")
 ```
+Les résultats du modèle PLS montrent un pouvoir explicatif élevé dès la première composante (R² ≈ 0,74), bien supérieur à celui de la PCR à ce stade. Le R² augmente rapidement pour atteindre environ 0,88 dès 3 à 4 composantes, puis se stabilise.
+
+Parallèlement, l’erreur de prédiction (RMSEP) diminue fortement au début, passant d’environ 0,50 à 0,34, puis se stabilise, confirmant qu’un nombre réduit de composantes est suffisant pour obtenir un modèle performant. Cette évolution traduit un bon compromis entre qualité d’ajustement et parcimonie.
+
 
 ## Validation croisée
 ```{r}
@@ -254,9 +304,13 @@ modelpls_cv <- plsr(lPM2_5 ~ ., data = air_quality_clean,
 RMSEP(modelpls_cv)
 validationplot(modelpls_cv, val.type = "RMSEP")
 ```
+La validation croisée du modèle PLS montre une diminution progressive de l’erreur de prédiction (RMSEP) à mesure que le nombre de composantes augmente. L’erreur passe de 0,96 avec une composante à environ 0,34 à partir de 6 composantes, puis se stabilise. Cette stabilisation indique que l’ajout de composantes supplémentaires n’apporte plus d’amélioration significative en termes de performance prédictive.
 
+On observe toutefois que la baisse la plus importante du RMSEP intervient entre 3 et 5 composantes, suggérant que l’essentiel de l’information utile est capturé dans cet intervalle.
 
 ## Division apprentissage / test
+
+La séparation des données en échantillons d’apprentissage et de test permet d’évaluer la capacité de généralisation du modèle.
 ```{r}
 set.seed(123)
 n <- nrow(air_quality_clean)
@@ -277,6 +331,13 @@ RMSEP(model_pls_cv)
 opt_ncomp <- which.min(RMSEP(model_pls_cv)$val[1,,])
 opt_ncomp
 ```
+```{r}
+## Prédiction sur le test
+pred_test <- predict(model_pls_cv, newdata = test_data, ncomp = 5)
+rmse_test <- sqrt(mean((test_data$lPM2_5 - pred_test)^2))
+rmse_test
+```
+L’erreur de prédiction obtenue sur l’échantillon test (RMSE = 0,37) est proche de celle issue de la validation croisée (≈ 0,34), ce qui indique une bonne capacité de généralisation du modèle et l’absence de surajustement.
 
 # Comparaison PCR vs PLS
 
