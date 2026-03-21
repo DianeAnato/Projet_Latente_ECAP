@@ -1,0 +1,336 @@
+---
+format:
+  pdf:
+    pdf-engine: pdflatex
+    linkcolor: black
+    urlcolor: black
+    citecolor: black
+    number-sections: true
+    code-fold: true
+execute: 
+  echo: false       
+  warning: false    
+  message: false 
+lang: fr
+---
+
+\begin{center}
+\vspace*{3cm}
+{\LARGE \textbf{Analyse de la qualité de l'air de la station Aotizhongxin 2013-2017}}\\[0.5cm]
+{\large Modélisation des variables latentes}\\[2cm]
+{\large Céline THIOMBIANO — Sarah BIZA — Diane ANATO}\\[0.5cm]
+\vfill
+\end{center}
+
+\newpage
+\tableofcontents
+\newpage
+
+# Introduction
+
+# Présentation des données
+
+## Description du jeu de données
+
+## Description des variables
+
+## Choix de la variable dépendante
+
+# Préparation et nettoyage des données
+
+## Importation des packages et des données
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(mice)
+library(naniar)
+library(corrplot)
+library(RColorBrewer)
+library(vcd)
+library(DescTools)
+library(forcats)
+library(reshape2)
+library(factoextra)
+library(FactoMineR)
+library(psych)
+library(lmtest)
+library(vip)
+library(caret)
+library(pls)
+library(ggcorrplot)
+library(car)
+
+air_quality <- read_csv("Aotizhongxin.csv")
+str(air_quality)
+summary(air_quality)
+```
+
+
+# Préparation et nettoyage des données
+
+## Suppression des variables inutiles
+```{r}
+air_quality <- air_quality |>
+  select(-No, -year, -month, -day, -hour, -wd, -RAIN, -station)
+
+str(air_quality)
+summary(air_quality)
+```
+
+## Suppression des valeurs manquantes
+```{r}
+air_quality <- na.omit(air_quality)
+colSums(is.na(air_quality))
+```
+
+## Transformation et linéarisation
+```{r}
+air_quality <- air_quality |>
+  mutate(
+    CO = log(CO),
+    NO2 = log(NO2),
+    O3 = log(O3),
+    PM10 = log(PM10),
+    `PM2.5` = log(`PM2.5`),
+    SO2 = log(SO2)
+  ) |>
+  rename(
+    lCO = CO,
+    lNO2 = NO2,
+    lO3 = O3,
+    lPM10 = PM10,
+    lPM2_5 = `PM2.5`,
+    lSO2 = SO2
+  )
+```
+
+
+## Détection et traitement des valeurs aberrantes
+```{r}
+vars_outliers <- c("lCO", "lNO2", "lO3", "lPM10", "WSPM")
+
+remove_outliers_iqr <- function(data, vars) {
+  data %>%
+    filter(
+      if_all(
+        all_of(vars),
+        ~ . >= quantile(., 0.25, na.rm = TRUE) - 1.5 * IQR(., na.rm = TRUE) &
+          . <= quantile(., 0.75, na.rm = TRUE) + 1.5 * IQR(., na.rm = TRUE)
+      )
+    )
+}
+
+air_quality_clean <- air_quality
+n_old <- nrow(air_quality_clean)
+
+repeat {
+  air_quality_clean <- remove_outliers_iqr(air_quality_clean, vars_outliers)
+  n_new <- nrow(air_quality_clean)
+  if (n_new == n_old) break
+  n_old <- n_new
+}
+
+str(air_quality_clean)
+summary(air_quality_clean)
+```
+
+# Analyse exploratoire
+
+## Statistiques descriptives
+```{r}
+desc_stats <- air_quality_clean |>
+  psych::describe() |>
+  select(-vars, -n, -trimmed, -mad) |>      
+  rename(
+    Moyenne = mean,
+    Ecart_type = sd,
+    Mediane = median,
+    Min = min,
+    Max = max,
+    Plage = range,
+    Asymetrie = skew,
+    Kurtosis = kurtosis,
+    Erreur_standard = se
+  ) |>
+  mutate(across(where(is.numeric), ~round(., 2)))
+
+desc_stats
+```
+
+## Histogrammes
+```{r}
+num_cols <- colnames(air_quality_clean)
+
+# Palette pastel (ex : 9 couleurs maximum pour 3x3)
+colors <- brewer.pal(n = length(num_cols), name = "Pastel1")
+
+par(mfrow=c(2,2), mar=c(4,4,2,1))
+
+for(i in seq_along(num_cols)){
+  hist(air_quality_clean[[num_cols[i]]],
+       main = paste("Histogramme de", num_cols[i]),
+       xlab = num_cols[i],
+       col = colors[i],
+       border = "black",
+       probability = TRUE)
+  
+  # Ajouter densité
+  lines(density(air_quality_clean[[num_cols[i]]]), col="red", lwd=2)
+}
+```
+
+## Boxplots
+```{r}
+par(mfrow=c(2,2), mar=c(4,4,2,1))
+
+for(i in seq_along(num_cols)){
+  boxplot(air_quality_clean[[num_cols[i]]],
+       main = paste("Boxplot de", num_cols[i]),
+       xlab = num_cols[i],
+       col = colors[i],
+       border = "black",
+       probability = TRUE)
+}
+  
+```
+
+## Matrice de corrélation
+```{r}
+cor_matrix <- cor(air_quality_clean)
+ggcorrplot(cor_matrix, hc.order = TRUE, type = "lower", lab = TRUE)
+```
+
+## Analyse en composantes principales
+```{r}
+respca <- PCA(air_quality_clean, quanti.sup = 1)
+fviz_screeplot(respca)
+fviz_pca_var(respca)
+dimdesc(respca)
+```
+
+# Modélisation
+
+## Modèle MCO
+```{r}
+modelmco <- lm(lPM2_5 ~ ., data = air_quality_clean)
+summary(modelmco)
+VIF(modelmco)
+```
+
+## Modélisation PCR
+```{r}
+n <- nrow(air_quality_clean)
+p <- ncol(air_quality_clean) - 1
+
+modelpcr <- pcr(lPM2_5 ~ ., data = air_quality_clean,
+                ncomp = min(n - 1, p), scale = TRUE)
+
+summary(modelpcr)
+R2(modelpcr)
+validationplot(modelpcr, val.type = "R2", type = "b")
+RMSEP(modelpcr)
+validationplot(modelpcr, type = "b")
+```
+
+## Modélisation PLS
+```{r}
+modelpls <- plsr(lPM2_5 ~ ., data = air_quality_clean,
+                 ncomp = min(n - 1, p), scale = TRUE)
+
+summary(modelpls)
+R2(modelpls)
+validationplot(modelpls, val.type = "R2", type = "b")
+RMSEP(modelpls)
+validationplot(modelpls, type = "b")
+```
+
+## Validation croisée
+```{r}
+set.seed(123)
+modelpls_cv <- plsr(lPM2_5 ~ ., data = air_quality_clean,
+                    ncomp = min(n - 1, p), validation = "CV")
+
+RMSEP(modelpls_cv)
+validationplot(modelpls_cv, val.type = "RMSEP")
+```
+
+
+## Division apprentissage / test
+```{r}
+set.seed(123)
+n <- nrow(air_quality_clean)
+train_index <- sample(1:n, size = 0.8 * n)
+
+train_data <- air_quality_clean[train_index, ]
+test_data  <- air_quality_clean[-train_index, ]
+```
+
+## Modèle PLS optimisé
+```{r}
+model_pls_cv <- plsr(lPM2_5 ~ ., data = train_data,
+                     ncomp = 9, validation = "CV")
+
+validationplot(model_pls_cv, val.type = "RMSEP")
+RMSEP(model_pls_cv)
+
+opt_ncomp <- which.min(RMSEP(model_pls_cv)$val[1,,])
+opt_ncomp
+```
+
+# Comparaison PCR vs PLS
+
+## Tableau
+```{r}
+ncomp_comp <- min(opt_ncomp, 5)  
+
+pred_pcr_test <- predict(modelpcr, newdata = test_data, ncomp = ncomp_comp)
+pred_pls_test <- predict(modelpls_cv,   newdata = test_data, ncomp = ncomp_comp)
+
+# Fonction MAE
+mae <- function(obs, pred) mean(abs(obs - pred))
+
+# Indicateurs pour PCR
+rmse_pcr <- sqrt(mean((test_data$lPM2_5 - pred_pcr_test)^2))
+r2_pcr   <- 1 - sum((test_data$lPM2_5 - pred_pcr_test)^2) /
+                sum((test_data$lPM2_5 - mean(test_data$lPM2_5))^2)
+mae_pcr  <- mae(test_data$lPM2_5, pred_pcr_test)
+
+# Indicateurs pour PLS
+rmse_pls <- sqrt(mean((test_data$lPM2_5 - pred_pls_test)^2))
+r2_pls   <- 1 - sum((test_data$lPM2_5 - pred_pls_test)^2) /
+                sum((test_data$lPM2_5 - mean(test_data$lPM2_5))^2)
+mae_pls  <- mae(test_data$lPM2_5, pred_pls_test)
+
+# Tableau comparatif
+results <- data.frame(
+  Modele = c("PCR", "PLS"),
+  Nb_composantes = ncomp_comp,
+  RMSE   = c(rmse_pcr, rmse_pls),
+  R2     = c(r2_pcr,   r2_pls),
+  MAE    = c(mae_pcr,  mae_pls)
+)
+
+results
+```
+
+## Comparaison graphique RMSEP PCR vs PLS sur toute la base 
+```{r}
+plot(0:p, RMSEP(modelpls)$val,
+     type = "b",
+     main = "RMSEP sur toute la base",
+     ylab = "",
+     xlab = "Nombre de composantes")
+
+lines(0:p, RMSEP(modelpcr)$val, col = "blue")
+points(0:p, RMSEP(modelpcr)$val, col = "blue")
+
+legend("topright",
+       c("PLSR", "PCR"),
+       col = c("black", "blue"),
+       lty = 1,
+       pch = 1)
+```
+
+
+# Conclusion
